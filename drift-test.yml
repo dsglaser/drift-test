@@ -9,7 +9,11 @@
       - perl
       - python3
       - libstdc++
-  
+   - disallowed_users:
+      - bob
+      - sue
+      - mohammad
+
   tasks:
 #    - name: DNS lookup of www.google.com
 #      debug: 
@@ -17,7 +21,7 @@
 #      when: "{{ lookup('dig', 'www.google.com') }}"
   
   
-    - name: Verify package installation
+    - name: Configrm Default Ueg Packages are installed
       yum:
         name: "{{ item }}"
         state: present
@@ -29,7 +33,7 @@
         $(pgrep bpcd)
       check_mode: no
   
-    - name: Confirm NTP is running
+    - name: NTP
       service: 
         name: chronyd
         state: started
@@ -43,7 +47,7 @@
         mode: 0644
         setype: etc_t
   
-    - name: Run logrotate command
+    - name: Logrotation
       shell: /etc/cron.daily/logrotate
       register: logrotate_out
       ignore_errors: true
@@ -56,4 +60,21 @@
         msg: "Logrotate return code was not 0!"
       when: logrotate_out.rc != 0
 
+    - name: Confirm autofs is working
+      stat:
+        path: /etc
+      register: etc_out
+
+    - name: Error if autofs is not working
+      fail:
+        msg: "Can't list contents of /etc!"
+      when: etc_out.stat.isdir != true
+      ignore_errors: true
+
+    - name: Cron and At Disabled for non standard users in engineering Spec
+      user:
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ disallowed_users }}"
+    
 
