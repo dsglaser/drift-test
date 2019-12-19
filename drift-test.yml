@@ -1,0 +1,59 @@
+---
+- hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+   - pkg_list: 
+      - bc
+      - perl
+      - python3
+      - libstdc++
+  
+  tasks:
+#    - name: DNS lookup of www.google.com
+#      debug: 
+#        msg: "Success!"
+#      when: "{{ lookup('dig', 'www.google.com') }}"
+  
+  
+    - name: Verify package installation
+      yum:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ pkg_list }}"
+  
+    - name: Check if Netbackup (bpcd) process is running
+      shell: >
+        echo -n
+        $(pgrep bpcd)
+      check_mode: no
+  
+    - name: Confirm NTP is running
+      service: 
+        name: chronyd
+        state: started
+
+    - name: Confirm NTP config file is in place
+      copy:
+        src: chrony.conf
+        dest: /etc/chrony.conf
+        owner: root
+        group: root
+        mode: 0644
+        setype: etc_t
+  
+    - name: Run logrotate command
+      shell: /etc/cron.daily/logrotate
+      register: logrotate_out
+      ignore_errors: true
+      check_mode: no
+
+    - debug: msg="{{logrotate_out}}"
+
+    - name: verify return code of logrotate command is 0 
+      fail:
+        msg: "Logrotate return code was not 0!"
+      when: logrotate_out.rc != 0
+
+
