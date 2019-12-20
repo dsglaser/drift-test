@@ -4,7 +4,7 @@
   gather_facts: yes
 
   vars:
-   - pkg_list: 
+   - pkg_list:
       - bc
       - perl
       - python3
@@ -15,30 +15,44 @@
       - mohammad
 
   tasks:
-#    - name: DNS lookup of www.google.com
-#      debug: 
-#        msg: "Success!"
-#      when: "{{ lookup('dig', 'www.google.com') }}"
-  
-  
+
+    #
+#    - name: Verify login from Uegweb to host
+#      shell: "/home/grizz/ssh_check"
+#      delegate_to: 192.168.122.208
+
+
+    # Simple yum script to install packages. In check mode this will say
+    # what would have been installed if it had run in normal mode. (i.e. it
+    # will always say 'changed', but no packages are actually installed)
     - name: Configrm Default Ueg Packages are installed
       yum:
         name: "{{ item }}"
         state: present
       loop: "{{ pkg_list }}"
-  
+
+    # Shell command to see if a process is running. Since shell commands
+    # do not normally run in check mode, the 'check_mode' parameter tells
+    # the system to run it even if we are just checking
     - name: Check if Netbackup (bpcd) process is running
       shell: >
         echo -n
         $(pgrep bpcd)
       check_mode: no
-  
-    - name: NTP
-      service: 
-        name: chronyd
-        state: started
 
-    - name: Confirm NTP config file is in place
+    # Verification of config files can be done in many ways. In a situation
+    # where is there no reason for a local user to change a config file, the
+    # easiest verification of a configuration file is to copy the known
+    # config file to the host. It will return "Changed" if the file was
+    # different than the template. It's always good to set the owner, group,
+    # mode, and setype of a file when you copy it in.
+    #
+    # In a situation where the file may be edited on the local machine, then
+    # using the 'blockinfile' or 'lineinfile' modules can allow you to
+    # check to see that mandatory information exists in a file.
+    #
+    # Verify we have the current Chrony file in place.
+    - name: Confirm chrony config file is in place
       copy:
         src: chrony.conf
         dest: /etc/chrony.conf
@@ -46,35 +60,82 @@
         group: root
         mode: 0644
         setype: etc_t
-  
+
+    # The service command will try to start the service if it is not running
+    # on the host. If we are in check mode, this say 'changed' if it were
+    # going to start the service
+    - name: Confirm Chronyd is running
+      service:
+        name: chronyd
+        state: started
+
+    # Run the logrotate command and register the return code. Do not fail if
+    # the return code is not equal to zero, we will catch that in a moment.
+    # As a shell command, it will not run in check mode normaly, so we use
+    # the 'check_mode' parameter to force it to run.
     - name: Logrotation
       shell: /etc/cron.daily/logrotate
       register: logrotate_out
-      ignore_errors: true
+      changed_when: "logrotate_out.rc != 0"
       check_mode: no
 
-    - debug: msg="{{logrotate_out}}"
-
-    - name: verify return code of logrotate command is 0 
-      fail:
-        msg: "Logrotate return code was not 0!"
+    # Check the variable we are storing the logrotate output from above in.
+    # If the return code is non-zero, then notify the user.
+    - name: verify return code of logrotate command is 0
+      debug:
+        msg: "ERROR: Logrotate return code was not 0!"
       when: logrotate_out.rc != 0
 
+    # This check uses the stat module to confirm whether a directory exists.
+    # To use this for an actual autofs check, autofs needs to be set up with
+    # the directory being dynamically created, pointing to a mountpoint where
+    # autofs will mount the dynamic mountpoint won't work because the
+    # underlying directory will always be there.
     - name: Confirm autofs is working
       stat:
-        path: /etc
-      register: etc_out
+        path: "/usr/lib"
+      register: usrlib_out
+      changed_when: usrlib_out.stat.isdir == false
 
+    # Produce a pretty output for the user for the above check. Note we have
+    # to turn off errors on this in case the directory doesn't exist above.
     - name: Error if autofs is not working
       fail:
         msg: "Can't list contents of /etc!"
-      when: etc_out.stat.isdir != true
+      when: usrlib_out.stat.isdir != true
       ignore_errors: true
 
+    # Provide a list of users to remove from the machine. With 'state' absent,
+    # every user found on the system will be removed. In check mode, any user
+    # who would be removed is shown as 'changed' and any users not on the
+    # machine will show up with 'ok'
     - name: Cron and At Disabled for non standard users in engineering Spec
       user:
         name: "{{ item }}"
         state: absent
       loop: "{{ disallowed_users }}"
-    
 
+    # Configure kdump on machine using the Red Hat Supported system module.
+    # The rhel-system-roles package must exist on _controller_ for this to
+    # work correctly
+    - name: Configure kdump on machine and enable
+      include_role:
+        name: rhel-system-roles.kdump
+
+    # For tests that should only happen on a VM (or physical) host, checking
+    # the virtualization_role fact is the best way. For a VM, it should
+    # 'guest', for a physical host that runs a hypervisor it should return
+    # 'host', and for a physical host with no hypervisor, it will return 'NA'
+    #
+    # This conditional is currently just on a debug, but can be added to
+    # any task
+    - name: Check to see if we are on a VM
+      debug:
+        msg: "This is a VM!"
+      when: ansible_facts["virtualization_role"] == "guest"
+
+    # Configure timezone using the timezone module. It will adapt to whichever
+    # time system is being used on the host.
+    - name:
+      timezone:
+        name: America/Detroit
